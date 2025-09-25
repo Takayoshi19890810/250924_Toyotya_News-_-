@@ -8,6 +8,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 
@@ -22,6 +23,21 @@ def get_gspread_client():
     credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
     gc = gspread.authorize(credentials)
     return gc
+
+
+# ========== Selenium Driver 作成 ==========
+def create_driver():
+    chrome_options = Options()
+    chrome_options.binary_location = "/usr/bin/chromium-browser"  # Ubuntu での Chrome パス
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--lang=ja-JP")
+
+    service = Service("/usr/bin/chromedriver")  # chromedriver のパス
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
 
 # ========== コメント全件取得 ==========
@@ -84,17 +100,10 @@ def fetch_article_details(url: str):
 
 
 # ========== Yahooニュース検索 (Selenium利用) ==========
-def scrape_yahoo_news(keyword: str, limit: int = 3):
+def scrape_yahoo_news(keyword: str):
     print(f"🔎 Yahooニュース検索開始: {keyword}")
 
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--lang=ja-JP")
-
-    driver = webdriver.Chrome(options=chrome_options)
+    driver = create_driver()
     search_url = f"https://news.yahoo.co.jp/search?p={keyword}&ei=utf-8"
     driver.get(search_url)
     time.sleep(3)
@@ -107,17 +116,17 @@ def scrape_yahoo_news(keyword: str, limit: int = 3):
             urls.append(href)
 
     driver.quit()
-    urls = list(dict.fromkeys(urls))
+    urls = list(dict.fromkeys(urls))  # 重複排除
 
     rows = []
-    for href in urls[:limit]:
+    for href in urls:
         body, source, pubdate, comments = fetch_article_details(href)
         comment_count = len(comments)
 
         if comments:
             for c in comments:
                 row = [
-                    f"[{keyword}] {href.split('/')[-1]}",  # タイトル（簡易）
+                    f"[{keyword}] {href.split('/')[-1]}",  # 簡易タイトル
                     href,
                     source,
                     pubdate,
@@ -150,7 +159,7 @@ def write_to_sheet(sh, keyword: str, rows: list):
     try:
         worksheet = sh.worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = sh.add_worksheet(title=sheet_name, rows="20000", cols="9")
+        worksheet = sh.add_worksheet(title=sheet_name, rows="200000", cols="9")
 
     headers = [
         "タイトル", "URL", "引用元", "発行日時",
@@ -159,7 +168,11 @@ def write_to_sheet(sh, keyword: str, rows: list):
     worksheet.update("A1:I1", [headers])
 
     if rows:
-        worksheet.update(f"A2:I{len(rows)+1}", rows)
+        # Google Sheets API は1リクエストで5万セル制限があるので、分割更新
+        chunk_size = 5000
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i:i+chunk_size]
+            worksheet.update(f"A{i+2}:I{i+1+len(chunk)}", chunk)
 
 
 # ========== メイン処理 ==========
@@ -172,7 +185,7 @@ def main():
     gc = get_gspread_client()
     sh = gc.open_by_key(spreadsheet_id)
 
-    rows = scrape_yahoo_news(keyword, limit=3)
+    rows = scrape_yahoo_news(keyword)
 
     if rows:
         write_to_sheet(sh, keyword, rows)
