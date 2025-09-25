@@ -26,13 +26,12 @@ def get_gspread_client():
 
 # ========== コメント全件取得 ==========
 def fetch_all_comments(article_id: str, headers: dict):
-    """Yahooニュースのコメントを全件取得"""
     comments = []
     cursor = None
     base_url = f"https://news.yahoo.co.jp/comment/plugin/v1/full/{article_id}"
 
     while True:
-        params = {"sort": "time"}  # 時系列順
+        params = {"sort": "time"}
         if cursor:
             params["cursor"] = cursor
 
@@ -47,7 +46,7 @@ def fetch_all_comments(article_id: str, headers: dict):
             comments.extend(comments_batch)
 
             cursor = result.get("next")
-            if not cursor:  # 次ページが無ければ終了
+            if not cursor:
                 break
         except Exception:
             break
@@ -67,31 +66,25 @@ def fetch_article_details(url: str):
     }
     res = requests.get(url, headers=headers)
     if res.status_code != 200:
-        return "", "", "", 0, []
+        return "", "", "", [], []
 
     soup = BeautifulSoup(res.text, "html.parser")
 
-    # 本文
     body = " ".join([p.get_text(strip=True) for p in soup.select("div.article_body p, div.yjS p")])
-
-    # 引用元・発行日時
     source = soup.select_one("span.source").get_text(strip=True) if soup.select_one("span.source") else ""
     pubdate = soup.select_one("time").get_text(strip=True) if soup.select_one("time") else ""
 
-    # コメント全件取得
     comments = []
-    comment_count = 0
     m = re.search(r"/articles/([0-9a-f]+)", url)
     if m:
         article_id = m.group(1)
         comments = fetch_all_comments(article_id, headers)
-        comment_count = len(comments)
 
-    return body, source, pubdate, comment_count, comments
+    return body, source, pubdate, comments
 
 
 # ========== Yahooニュース検索 (Selenium利用) ==========
-def scrape_yahoo_news(keyword: str, limit: int = 20):
+def scrape_yahoo_news(keyword: str, limit: int = 3):
     print(f"🔎 Yahooニュース検索開始: {keyword}")
 
     chrome_options = Options()
@@ -116,46 +109,57 @@ def scrape_yahoo_news(keyword: str, limit: int = 20):
     driver.quit()
     urls = list(dict.fromkeys(urls))
 
-    articles = []
-    no = 1
+    rows = []
     for href in urls[:limit]:
-        body, source, pubdate, comment_count, comments = fetch_article_details(href)
-        row = [
-            no,
-            f"[{keyword}] {href.split('/')[-1]}",  # タイトル（簡易版）
-            href,
-            source,
-            pubdate,
-            "",  # ポジネガ
-            "",  # カテゴリ
-            body,
-            comment_count,
-            "\n".join(comments),  # 全件を1セルに格納（改行区切り）
-        ]
-        articles.append(row)
-        print(f"{no}. {href} コメント数: {comment_count}")
-        no += 1
+        body, source, pubdate, comments = fetch_article_details(href)
+        comment_count = len(comments)
 
-    print(f"✅ {len(articles)} 件取得")
-    return articles
+        if comments:
+            for c in comments:
+                row = [
+                    f"[{keyword}] {href.split('/')[-1]}",  # タイトル（簡易）
+                    href,
+                    source,
+                    pubdate,
+                    "",  # ポジネガ
+                    "",  # カテゴリ
+                    body,
+                    comment_count,
+                    c,  # コメント1件
+                ]
+                rows.append(row)
+        else:
+            row = [
+                f"[{keyword}] {href.split('/')[-1]}",
+                href,
+                source,
+                pubdate,
+                "", "", body, 0, ""
+            ]
+            rows.append(row)
+
+        print(f"{href} コメント数: {comment_count}")
+
+    print(f"✅ {len(rows)} 行を出力")
+    return rows
 
 
 # ========== シートへの書き込み ==========
-def write_to_sheet(sh, keyword: str, articles: list):
+def write_to_sheet(sh, keyword: str, rows: list):
     sheet_name = keyword
     try:
         worksheet = sh.worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = sh.add_worksheet(title=sheet_name, rows="2000", cols="10")
+        worksheet = sh.add_worksheet(title=sheet_name, rows="20000", cols="9")
 
     headers = [
-        "No.", "タイトル", "URL", "引用元", "発行日時",
+        "タイトル", "URL", "引用元", "発行日時",
         "ポジネガ", "カテゴリ", "本文", "コメント数", "コメント"
     ]
-    worksheet.update("A1:J1", [headers])
+    worksheet.update("A1:I1", [headers])
 
-    if articles:
-        worksheet.update(f"A2:J{len(articles)+1}", articles)
+    if rows:
+        worksheet.update(f"A2:I{len(rows)+1}", rows)
 
 
 # ========== メイン処理 ==========
@@ -168,13 +172,13 @@ def main():
     gc = get_gspread_client()
     sh = gc.open_by_key(spreadsheet_id)
 
-    articles = scrape_yahoo_news(keyword, limit=5)  # コメント全件取得なので記事数は少なめ推奨
+    rows = scrape_yahoo_news(keyword, limit=3)
 
-    if articles:
-        write_to_sheet(sh, keyword, articles)
+    if rows:
+        write_to_sheet(sh, keyword, rows)
         print("✅ スプレッドシートに書き込みました。")
     else:
-        print("⚠️ 記事が取得できませんでした。")
+        print("⚠️ データが取得できませんでした。")
 
 
 if __name__ == "__main__":
