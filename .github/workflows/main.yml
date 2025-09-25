@@ -3,11 +3,11 @@ name: News scrape (Ubuntu 24.04)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * *"  # 毎日15:00 JST (= 06:00 UTC) に実行
+    - cron: "0 6 * * *"  # 毎日15:00 JST (=06:00 UTC) に実行
 
 jobs:
   run:
-    runs-on: ubuntu-latest  # GitHub Hosted Runner (Ubuntu 24.04 noble)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           sudo apt-get install -y \
             ca-certificates \
             fonts-liberation \
-            libasound2 \
+            libasound2t64 \
             libatk-bridge2.0-0 \
             libatk1.0-0 \
             libcairo2 \
@@ -42,18 +42,8 @@ jobs:
             libxtst6 \
             xdg-utils \
             unzip
-          # 注意: Ubuntu 24.04 (noble) には libgconf-2-4 は存在しないため入れない
-
-      # 必要時のみ有効化してください（通常は不要）
-      # - name: Install Google Chrome (optional)
-      #   run: |
-      #     wget -qO- https://dl.google.com/linux/linux_signing_key.pub | \
-      #       sudo gpg --dearmor -o /usr/share/keyrings/google-linux-signing-keyring.gpg
-      #     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux-signing-keyring.gpg] \
-      #       http://dl.google.com/linux/chrome/deb/ stable main" | \
-      #       sudo tee /etc/apt/sources.list.d/google-chrome.list
-      #     sudo apt-get update
-      #     sudo apt-get install -y google-chrome-stable
+          # 注意: noble では libasound2 → libasound2t64 に置き換え
+          #       libgconf-2-4 は存在しないため不要
 
       - name: Install Python dependencies
         run: |
