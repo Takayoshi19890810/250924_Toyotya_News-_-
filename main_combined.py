@@ -1,10 +1,14 @@
 import os
 import re
 import json
+import time
 import requests
 from bs4 import BeautifulSoup
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 
 
 # ========== Google Sheets 接続 ==========
@@ -22,8 +26,14 @@ def get_gspread_client():
 
 # ========== Yahooニュース本文・コメント取得 ==========
 def fetch_article_details(url: str):
-    """記事本文・発行日時・引用元・コメント数・コメント本文を取得"""
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/117.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    }
     res = requests.get(url, headers=headers)
     if res.status_code != 200:
         return "", "", "", 0, []
@@ -57,48 +67,51 @@ def fetch_article_details(url: str):
     return body, source, pubdate, comment_count, comments
 
 
-# ========== Yahooニュース検索 ==========
-def scrape_yahoo_news(keyword: str, limit: int = 30):
+# ========== Yahooニュース検索 (Selenium利用) ==========
+def scrape_yahoo_news(keyword: str, limit: int = 20):
     print(f"🔎 Yahooニュース検索開始: {keyword}")
 
-    url = f"https://news.yahoo.co.jp/search?p={keyword}&ei=utf-8"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers)
-    if res.status_code != 200:
-        print(f"❌ リクエスト失敗: {res.status_code}")
-        return []
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--lang=ja-JP")
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    driver = webdriver.Chrome(options=chrome_options)
+    search_url = f"https://news.yahoo.co.jp/search?p={keyword}&ei=utf-8"
+    driver.get(search_url)
+    time.sleep(3)  # ページロード待ち
+
+    elems = driver.find_elements(By.CSS_SELECTOR, "a")
+    urls = []
+    for e in elems:
+        href = e.get_attribute("href")
+        if href and "news.yahoo.co.jp/articles/" in href:
+            urls.append(href)
+
+    driver.quit()
+    urls = list(dict.fromkeys(urls))  # 重複排除
+
     articles = []
     no = 1
-
-    for a in soup.select("a"):
-        href = a.get("href")
-        title = a.get_text(strip=True)
-        if not href or "news.yahoo.co.jp/articles/" not in href:
-            continue
-
-        # 詳細情報を取得
+    for href in urls[:limit]:
         body, source, pubdate, comment_count, comments = fetch_article_details(href)
-
         row = [
-            no,             # No.
-            title,          # タイトル
-            href,           # URL
-            source,         # 引用元
-            pubdate,        # 発行日時
-            "",             # ポジネガ（後で分析用）
-            "",             # カテゴリ（後で分類用）
-            body,           # 本文
-            comment_count,  # コメント数
-            "\n".join(comments[:10])  # コメント（多すぎるので上位10件）
+            no,
+            f"[{keyword}] {href.split('/')[-1]}",  # タイトルは本文から取得済みにするのが安全だが簡略化
+            href,
+            source,
+            pubdate,
+            "",  # ポジネガ（後で分析用）
+            "",  # カテゴリ（後で分類用）
+            body,
+            comment_count,
+            "\n".join(comments[:10]),
         ]
         articles.append(row)
-
-        print(f"{no}. {title} ({href}) コメント数: {comment_count}")
+        print(f"{no}. {href} コメント数: {comment_count}")
         no += 1
-        if len(articles) >= limit:
-            break
 
     print(f"✅ {len(articles)} 件取得")
     return articles
@@ -132,7 +145,7 @@ def main():
     gc = get_gspread_client()
     sh = gc.open_by_key(spreadsheet_id)
 
-    articles = scrape_yahoo_news(keyword, limit=20)  # 記事数は20件程度に制限（負荷回避）
+    articles = scrape_yahoo_news(keyword, limit=10)
 
     if articles:
         write_to_sheet(sh, keyword, articles)
