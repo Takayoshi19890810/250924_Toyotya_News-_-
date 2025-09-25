@@ -24,6 +24,37 @@ def get_gspread_client():
     return gc
 
 
+# ========== コメント全件取得 ==========
+def fetch_all_comments(article_id: str, headers: dict):
+    """Yahooニュースのコメントを全件取得"""
+    comments = []
+    cursor = None
+    base_url = f"https://news.yahoo.co.jp/comment/plugin/v1/full/{article_id}"
+
+    while True:
+        params = {"sort": "time"}  # 時系列順
+        if cursor:
+            params["cursor"] = cursor
+
+        res = requests.get(base_url, headers=headers, params=params)
+        if res.status_code != 200:
+            break
+
+        try:
+            data = res.json()
+            result = data.get("result", {})
+            comments_batch = [c.get("comment", "") for c in result.get("comments", [])]
+            comments.extend(comments_batch)
+
+            cursor = result.get("next")
+            if not cursor:  # 次ページが無ければ終了
+                break
+        except Exception:
+            break
+
+    return comments
+
+
 # ========== Yahooニュース本文・コメント取得 ==========
 def fetch_article_details(url: str):
     headers = {
@@ -47,22 +78,14 @@ def fetch_article_details(url: str):
     source = soup.select_one("span.source").get_text(strip=True) if soup.select_one("span.source") else ""
     pubdate = soup.select_one("time").get_text(strip=True) if soup.select_one("time") else ""
 
-    # コメント取得
+    # コメント全件取得
     comments = []
     comment_count = 0
     m = re.search(r"/articles/([0-9a-f]+)", url)
     if m:
         article_id = m.group(1)
-        api_url = f"https://news.yahoo.co.jp/comment/plugin/v1/full/{article_id}"
-        res_c = requests.get(api_url, headers=headers)
-        if res_c.status_code == 200:
-            try:
-                data = res_c.json()
-                comment_count = data.get("result", {}).get("comment_count", 0)
-                for c in data.get("result", {}).get("comments", []):
-                    comments.append(c.get("comment", ""))
-            except Exception:
-                pass
+        comments = fetch_all_comments(article_id, headers)
+        comment_count = len(comments)
 
     return body, source, pubdate, comment_count, comments
 
@@ -81,7 +104,7 @@ def scrape_yahoo_news(keyword: str, limit: int = 20):
     driver = webdriver.Chrome(options=chrome_options)
     search_url = f"https://news.yahoo.co.jp/search?p={keyword}&ei=utf-8"
     driver.get(search_url)
-    time.sleep(3)  # ページロード待ち
+    time.sleep(3)
 
     elems = driver.find_elements(By.CSS_SELECTOR, "a")
     urls = []
@@ -91,7 +114,7 @@ def scrape_yahoo_news(keyword: str, limit: int = 20):
             urls.append(href)
 
     driver.quit()
-    urls = list(dict.fromkeys(urls))  # 重複排除
+    urls = list(dict.fromkeys(urls))
 
     articles = []
     no = 1
@@ -99,15 +122,15 @@ def scrape_yahoo_news(keyword: str, limit: int = 20):
         body, source, pubdate, comment_count, comments = fetch_article_details(href)
         row = [
             no,
-            f"[{keyword}] {href.split('/')[-1]}",  # タイトルは本文から取得済みにするのが安全だが簡略化
+            f"[{keyword}] {href.split('/')[-1]}",  # タイトル（簡易版）
             href,
             source,
             pubdate,
-            "",  # ポジネガ（後で分析用）
-            "",  # カテゴリ（後で分類用）
+            "",  # ポジネガ
+            "",  # カテゴリ
             body,
             comment_count,
-            "\n".join(comments[:10]),
+            "\n".join(comments),  # 全件を1セルに格納（改行区切り）
         ]
         articles.append(row)
         print(f"{no}. {href} コメント数: {comment_count}")
@@ -137,7 +160,7 @@ def write_to_sheet(sh, keyword: str, articles: list):
 
 # ========== メイン処理 ==========
 def main():
-    keyword = "トヨタ"  # 固定
+    keyword = "トヨタ"
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     if not spreadsheet_id:
         raise RuntimeError("SPREADSHEET_ID が未設定です。")
@@ -145,7 +168,7 @@ def main():
     gc = get_gspread_client()
     sh = gc.open_by_key(spreadsheet_id)
 
-    articles = scrape_yahoo_news(keyword, limit=10)
+    articles = scrape_yahoo_news(keyword, limit=5)  # コメント全件取得なので記事数は少なめ推奨
 
     if articles:
         write_to_sheet(sh, keyword, articles)
