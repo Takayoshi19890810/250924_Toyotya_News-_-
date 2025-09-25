@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system deps (Chrome + Driver)
+      - name: Install system deps (Chromium + Driver)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -42,8 +42,12 @@ jobs:
             libxtst6 \
             xdg-utils \
             unzip \
-            chromium-browser \
-            chromium-chromedriver
+            chromium \
+            chromium-driver
+          # 確認ログ
+          which chromium-browser || true
+          which chromium || true
+          which chromedriver || true
 
       - name: Install Python dependencies
         run: |
